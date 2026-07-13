@@ -1,10 +1,42 @@
 // parser.worker.js
 
-// Listen for the file from the main React thread
+let db = null;
+
+// Helper to open/initialize IndexedDB inside the worker
+function initDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("LargeCSVDatabase", 1);
+
+    request.onupgradeneeded = (e) => {
+      const database = e.target.result;
+      // Create a store that uses the row index as the primary key
+      if (!database.objectStoreNames.contains("rows")) {
+        database.createObjectStore("rows", { keyPath: "id" });
+      }
+    };
+
+    request.onsuccess = (e) => {
+      db = e.target.result;
+      resolve(db);
+    };
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
 self.onmessage = async (e) => {
   const { file } = e.data;
-  
-  // 1. Get a stream reader from the file
+  if (!file) return;
+
+  self.postMessage({ type: 'STATUS', message: "Initializing local database..." });
+  await initDB();
+
+  // Clear any existing old data before starting a new upload
+  await new Promise((res) => {
+    const tx = db.transaction("rows", "readwrite");
+    tx.objectStoreNames.contains("rows") && tx.objectStore("rows").clear();
+    tx.oncomplete = () => res();
+  });
+
   const stream = file.stream();
   const reader = stream.getReader();
   const decoder = new TextDecoder("utf-8");
@@ -12,35 +44,44 @@ self.onmessage = async (e) => {
   let leftover = "";
   let rowCount = 0;
 
+  self.postMessage({ type: 'STATUS', message: "Streaming file directly to local storage..." });
+
   try {
     while (true) {
-      // 2. Read the file chunk-by-chunk (typically 64KB - few MBs depending on browser)
       const { done, value } = await reader.read();
       
       if (done) {
-        // Process any final remaining text
         if (leftover.length > 0) {
-          const finalRow = parseCSVLine(leftover);
-          self.postMessage({ type: 'DATA', rows: [finalRow] });
+          await saveBatchToDB([{ id: rowCount, data: parseCSVLine(leftover) }]);
+          rowCount++;
         }
         break;
       }
 
-      // 3. Decode binary Uint8Array chunk to string text
       const chunkText = leftover + decoder.decode(value, { stream: true });
-      
-      // 4. Split by newlines (handles both Windows \r\n and Unix \n)
       const lines = chunkText.split(/\r?\n/);
-      
-      // The last element is likely an incomplete line. Save it for the next chunk.
       leftover = lines.pop() || "";
 
-      // 5. Parse the complete lines in this chunk
-      const parsedRows = lines.map(line => parseCSVLine(line));
-      rowCount += parsedRows.length;
+      // Format data into objects for IndexedDB
+      const dbBatch = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === "") continue;
+        dbBatch.push({
+          id: rowCount, // Key path
+          data: parseCSVLine(lines[i])
+        });
+        rowCount++;
+      }
 
-      // 6. Send the batch of rows back to React immediately so memory stays low here
-      self.postMessage({ type: 'BATCH', rows: parsedRows, totalSoFar: rowCount });
+      // Write this chunk batch directly to disk
+      if (dbBatch.length > 0) {
+        await saveBatchToDB(dbBatch);
+      }
+
+      // Keep the main thread updated without sending the actual massive array data
+      if (rowCount % 50000 === 0 || rowCount < 50000) {
+        self.postMessage({ type: 'PROGRESS', totalSoFar: rowCount });
+      }
     }
 
     self.postMessage({ type: 'DONE', totalRows: rowCount });
@@ -49,12 +90,20 @@ self.onmessage = async (e) => {
   }
 };
 
-/**
- * A basic CSV line parser. 
- * Handles simple commas. (For production, you'd add logic for quotes and escaped characters)
- */
+function saveBatchToDB(batch) {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction("rows", "readwrite");
+    const store = transaction.objectStore("rows");
+
+    for (const row of batch) {
+      store.put(row);
+    }
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = (e) => reject(e.target.error);
+  });
+}
+
 function parseCSVLine(text) {
-  // Simple split by comma. 
-  // If your data has commas inside quotes, you'd use a regex or state machine loop here.
   return text.split(',');
 }
