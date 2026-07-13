@@ -25,6 +25,7 @@ export default function CustomFileViewer() {
   const [status, setStatus] = useState('');
   const [mode, setMode] = useState<Mode>('traditional');
   const [, setCacheVersion] = useState(0);
+  const startTimeRef = useRef<number | null>(null);
 
   const workerRef = useRef<Worker | null>(null);
   const rowCacheRef = useRef<Record<number, ParsedRow>>({});
@@ -173,6 +174,7 @@ export default function CustomFileViewer() {
       reader.readAsText(file);
       return;
     }
+    const start = startTimeRef.current = performance.now();
 
     workerRef.current?.terminate();
     workerRef.current = new ParseWorker();
@@ -183,8 +185,12 @@ export default function CustomFileViewer() {
       if (type === 'STATUS') {
         setStatus(event.data.message);
       } else if (type === 'PROGRESS') {
+        setRowCount(event.data.totalSoFar);
         setStatus(`Loading... Parsed ${event.data.totalSoFar} rows`);
       } else if (type === 'DONE') {
+        const end = performance.now();
+        const duration = ((end - start) / 1000).toFixed(2);
+        console.log(`Parsing completed in ${duration} seconds`);
         setRowCount(event.data.totalRows);
         setStatus(`Finished! Total rows: ${event.data.totalRows}`);
       } else if (type === 'ERROR') {

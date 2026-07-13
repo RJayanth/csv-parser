@@ -55,6 +55,10 @@ self.onmessage = async (e) => {
           await saveBatchToDB([{ id: rowCount, data: parseCSVLine(leftover) }]);
           rowCount++;
         }
+
+        if (rowCount > 0) {
+          self.postMessage({ type: 'PROGRESS', totalSoFar: rowCount });
+        }
         break;
       }
 
@@ -79,7 +83,7 @@ self.onmessage = async (e) => {
       }
 
       // Keep the main thread updated without sending the actual massive array data
-      if (rowCount % 50000 === 0 || rowCount < 50000) {
+      if (rowCount % 1000 === 0 || rowCount < 1000) {
         self.postMessage({ type: 'PROGRESS', totalSoFar: rowCount });
       }
     }
