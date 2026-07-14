@@ -2,19 +2,15 @@
 
 let db = null;
 
-// Helper to open/initialize IndexedDB inside the worker
 function initDB() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("LargeCSVDatabase", 1);
-
     request.onupgradeneeded = (e) => {
       const database = e.target.result;
-      // Create a store that uses the row index as the primary key
       if (!database.objectStoreNames.contains("rows")) {
         database.createObjectStore("rows", { keyPath: "id" });
       }
     };
-
     request.onsuccess = (e) => {
       db = e.target.result;
       resolve(db);
@@ -27,64 +23,77 @@ self.onmessage = async (e) => {
   const { file } = e.data;
   if (!file) return;
 
-  self.postMessage({ type: 'STATUS', message: "Initializing local database..." });
+  self.postMessage({ type: 'STATUS', message: "Initializing index database..." });
   await initDB();
 
-  // Clear any existing old data before starting a new upload
-  await new Promise((res) => {
-    const tx = db.transaction("rows", "readwrite");
-    tx.objectStoreNames.contains("rows") && tx.objectStore("rows").clear();
-    tx.oncomplete = () => res();
-  });
+  // Instant clean
+  const txClear = db.transaction("rows", "readwrite");
+  txClear.objectStore("rows").clear();
 
   const stream = file.stream();
   const reader = stream.getReader();
-  const decoder = new TextDecoder("utf-8");
   
-  let leftover = "";
   let rowCount = 0;
+  let globalByteOffset = 0;
+  let leftoverBytes = new Uint8Array(0);
+  const fileSize = file.size;
 
-  self.postMessage({ type: 'STATUS', message: "Streaming file directly to local storage..." });
+  let bulkBuffer = [];
+  const BULK_COMMIT_SIZE = 100000; // Large buffer for speed
+
+  self.postMessage({ type: 'STATUS', message: "Indexing file structure..." });
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       
       if (done) {
-        if (leftover.length > 0) {
-          await saveBatchToDB([{ id: rowCount, data: parseCSVLine(leftover) }]);
+        if (leftoverBytes.length > 0) {
+          bulkBuffer.push({ id: rowCount, start: globalByteOffset, len: leftoverBytes.length });
           rowCount++;
         }
-
-        if (rowCount > 0) {
-          self.postMessage({ type: 'PROGRESS', totalSoFar: rowCount });
+        if (bulkBuffer.length > 0) {
+          await saveBatchToDB(bulkBuffer);
         }
         break;
       }
 
-      const chunkText = leftover + decoder.decode(value, { stream: true });
-      const lines = chunkText.split(/\r?\n/);
-      leftover = lines.pop() || "";
+      // Merge leftover bytes with the new chunk
+      const chunk = new Uint8Array(leftoverBytes.length + value.length);
+      chunk.set(leftoverBytes);
+      chunk.set(value, leftoverBytes.length);
 
-      // Format data into objects for IndexedDB
-      const dbBatch = [];
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i].trim() === "") continue;
-        dbBatch.push({
-          id: rowCount, // Key path
-          data: parseCSVLine(lines[i])
+      let lineStart = 0;
+      
+      // Fast binary scan for newlines (\n is byte 10)
+      for (let i = 0; i < chunk.length; i++) {
+        if (chunk[i] === 10) { // Newline '\n' character
+          const lineLength = i - lineStart + 1;
+          bulkBuffer.push({
+            id: rowCount,
+            start: globalByteOffset + lineStart,
+            len: lineLength
+          });
+          rowCount++;
+          lineStart = i + 1;
+        }
+      }
+
+      // Preserve trailing incomplete line bytes
+      leftoverBytes = chunk.subarray(lineStart);
+      globalByteOffset += lineStart;
+
+      // Batch save the offset integers to disk
+      if (bulkBuffer.length >= BULK_COMMIT_SIZE) {
+        await saveBatchToDB(bulkBuffer);
+        bulkBuffer = [];
+
+        const percentage = Math.min(((globalByteOffset / fileSize) * 100), 99).toFixed(1);
+        self.postMessage({ 
+          type: 'PROGRESS', 
+          totalSoFar: rowCount,
+          message: `Mapping... Indexed ${rowCount.toLocaleString()} rows (${percentage}%)`
         });
-        rowCount++;
-      }
-
-      // Write this chunk batch directly to disk
-      if (dbBatch.length > 0) {
-        await saveBatchToDB(dbBatch);
-      }
-
-      // Keep the main thread updated without sending the actual massive array data
-      if (rowCount % 1000 === 0 || rowCount < 1000) {
-        self.postMessage({ type: 'PROGRESS', totalSoFar: rowCount });
       }
     }
 
@@ -96,18 +105,12 @@ self.onmessage = async (e) => {
 
 function saveBatchToDB(batch) {
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction("rows", "readwrite");
+    const transaction = db.transaction("rows", "readwrite", { durability: "relaxed" });
     const store = transaction.objectStore("rows");
-
-    for (const row of batch) {
-      store.put(row);
+    for (let i = 0; i < batch.length; i++) {
+      store.put(batch[i]);
     }
-
     transaction.oncomplete = () => resolve();
-    transaction.onerror = (e) => reject(e.target.error);
+    transaction.onerror = (e) => reject(transaction.error);
   });
-}
-
-function parseCSVLine(text) {
-  return text.split(',');
 }

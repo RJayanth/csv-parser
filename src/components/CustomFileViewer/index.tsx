@@ -31,6 +31,7 @@ export default function CustomFileViewer() {
   const rowCacheRef = useRef<Record<number, ParsedRow>>({});
   const dbRef = useRef<IDBDatabase | null>(null);
   const loadingRangeRef = useRef<{ start: number; end: number } | null>(null);
+  const fileRef = useRef<File | null>(null);
 
   useEffect(() => {
     return () => {
@@ -69,7 +70,7 @@ export default function CustomFileViewer() {
   };
 
   const fetchRowsForRange = async (startIndex: number, endIndex: number) => {
-    if (rowCount <= 0) return;
+    if (rowCount <= 0 || !fileRef.current) return;
 
     const safeStart = Math.max(0, startIndex);
     const safeEnd = Math.min(Math.max(0, endIndex), rowCount - 1);
@@ -85,16 +86,28 @@ export default function CustomFileViewer() {
         IDBKeyRange.bound(safeStart, safeEnd, false, false),
       );
 
-      request.onsuccess = () => {
-        const rows = request.result ?? [];
+      request.onsuccess = async () => {
+        const offsets = request.result ?? [];
         const nextRows: Record<number, ParsedRow> = {};
+        const decoder = new TextDecoder('utf-8');
 
-        rows.forEach((rowEntry, index) => {
-          const rowIndex = safeStart + index;
-          if (rowEntry?.data) {
-            nextRows[rowIndex] = rowEntry.data;
+        // Loop through metadata and extract the row string directly from the file blob
+        for (let i = 0; i < offsets.length; i++) {
+          const offsetMeta = offsets[i];
+          const rowIndex = safeStart + i;
+
+          if (offsetMeta) {
+            // Instantaneous slice! Reads just those specific bytes from local disk.
+            const slice = fileRef.current!.slice(
+              offsetMeta.start,
+              offsetMeta.start + offsetMeta.len,
+            );
+            const buffer = await slice.arrayBuffer();
+            const textLine = decoder.decode(buffer).replace(/\r?\n/, '');
+
+            nextRows[rowIndex] = textLine.split(',');
           }
-        });
+        }
 
         const mergedCache = { ...rowCacheRef.current, ...nextRows };
         const entries = Object.entries(mergedCache).sort(
@@ -138,6 +151,7 @@ export default function CustomFileViewer() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    fileRef.current = file; // ◄── Keep a reference to the file blob
     setStatus('Processing...');
     setRowCount(0);
     setCacheVersion(0);
@@ -174,7 +188,7 @@ export default function CustomFileViewer() {
       reader.readAsText(file);
       return;
     }
-    const start = startTimeRef.current = performance.now();
+    const start = (startTimeRef.current = performance.now());
 
     workerRef.current?.terminate();
     workerRef.current = new ParseWorker();
@@ -186,13 +200,16 @@ export default function CustomFileViewer() {
         setStatus(event.data.message);
       } else if (type === 'PROGRESS') {
         setRowCount(event.data.totalSoFar);
-        setStatus(`Loading... Parsed ${event.data.totalSoFar} rows`);
+        // Use the customized message sent from the worker containing the percentage
+        setStatus((event.data as any).message);
       } else if (type === 'DONE') {
         const end = performance.now();
         const duration = ((end - start) / 1000).toFixed(2);
         console.log(`Parsing completed in ${duration} seconds`);
         setRowCount(event.data.totalRows);
-        setStatus(`Finished! Total rows: ${event.data.totalRows}`);
+        setStatus(
+          `Finished! Total rows: ${event.data.totalRows.toLocaleString()} in ${duration}s`,
+        );
       } else if (type === 'ERROR') {
         setStatus(`Error: ${event.data.error}`);
       }
