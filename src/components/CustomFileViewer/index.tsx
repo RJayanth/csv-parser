@@ -1,3 +1,4 @@
+// CustomFileViewer.tsx
 import {
   useState,
   useEffect,
@@ -5,9 +6,9 @@ import {
   type ChangeEvent,
   type CSSProperties,
 } from 'react';
-import { List } from 'react-window';
 
 import ParseWorker from '../../parser.worker.js?worker';
+import VirtualList from '../../commons/VirtualList';
 
 type Mode = 'traditional' | 'optimized';
 type ParsedRow = string[];
@@ -18,7 +19,7 @@ type WorkerMessageData =
   | { type: 'DONE'; totalRows: number }
   | { type: 'ERROR'; error: string };
 
-const MAX_CACHED_ROWS = 120;
+const MAX_CACHED_ROWS = 250;
 
 export default function CustomFileViewer() {
   const [rowCount, setRowCount] = useState(0);
@@ -30,7 +31,6 @@ export default function CustomFileViewer() {
   const workerRef = useRef<Worker | null>(null);
   const rowCacheRef = useRef<Record<number, ParsedRow>>({});
   const dbRef = useRef<IDBDatabase | null>(null);
-  const loadingRangeRef = useRef<{ start: number; end: number } | null>(null);
   const fileRef = useRef<File | null>(null);
 
   useEffect(() => {
@@ -45,7 +45,6 @@ export default function CustomFileViewer() {
     setStatus('');
     setCacheVersion(0);
     rowCacheRef.current = {};
-    loadingRangeRef.current = null;
     workerRef.current?.terminate();
     workerRef.current = null;
     dbRef.current?.close();
@@ -58,7 +57,14 @@ export default function CustomFileViewer() {
     }
 
     return new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('LargeCSVDatabase', 1);
+      const request = indexedDB.open('LargeCSVDatabase', 2);
+
+      request.onupgradeneeded = (e) => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains('blocks')) {
+          database.createObjectStore('blocks', { keyPath: 'blockIndex' });
+        }
+      };
 
       request.onsuccess = () => {
         dbRef.current = request.result;
@@ -69,6 +75,8 @@ export default function CustomFileViewer() {
     });
   };
 
+  const ROWS_PER_BLOCK = 5000;
+
   const fetchRowsForRange = async (startIndex: number, endIndex: number) => {
     if (rowCount <= 0 || !fileRef.current) return;
 
@@ -77,37 +85,42 @@ export default function CustomFileViewer() {
 
     if (safeEnd < safeStart) return;
 
+    const targetBlockIndex = Math.floor(safeStart / ROWS_PER_BLOCK);
+
     const database = await ensureDatabase();
-    const transaction = database.transaction('rows', 'readonly');
-    const store = transaction.objectStore('rows');
+    const transaction = database.transaction('blocks', 'readonly');
+    const store = transaction.objectStore('blocks');
 
-    await new Promise<void>((resolve, reject) => {
-      const request = store.getAll(
-        IDBKeyRange.bound(safeStart, safeEnd, false, false),
-      );
+    const request = store.get(targetBlockIndex);
 
-      request.onsuccess = async () => {
-        const offsets = request.result ?? [];
+    request.onsuccess = async () => {
+      const blockMeta = request.result;
+
+      if (!blockMeta) return;
+
+      const decoder = new TextDecoder('utf-8');
+
+      try {
+        const slice = fileRef.current!.slice(
+          blockMeta.startByte,
+          blockMeta.endByte,
+        );
+        const buffer = await slice.arrayBuffer();
+        const textBlock = decoder.decode(buffer);
+
+        const lines = textBlock.split(/\r?\n/);
         const nextRows: Record<number, ParsedRow> = {};
-        const decoder = new TextDecoder('utf-8');
 
-        // Loop through metadata and extract the row string directly from the file blob
-        for (let i = 0; i < offsets.length; i++) {
-          const offsetMeta = offsets[i];
-          const rowIndex = safeStart + i;
-
-          if (offsetMeta) {
-            // Instantaneous slice! Reads just those specific bytes from local disk.
-            const slice = fileRef.current!.slice(
-              offsetMeta.start,
-              offsetMeta.start + offsetMeta.len,
-            );
-            const buffer = await slice.arrayBuffer();
-            const textLine = decoder.decode(buffer).replace(/\r?\n/, '');
-
-            nextRows[rowIndex] = textLine.split(',');
+        lines.forEach((line, index) => {
+          const actualRowIndex = blockMeta.startRow + index;
+          if (
+            line.trim() !== '' &&
+            actualRowIndex <= safeEnd &&
+            actualRowIndex >= safeStart
+          ) {
+            nextRows[actualRowIndex] = line.split(',');
           }
-        }
+        });
 
         const mergedCache = { ...rowCacheRef.current, ...nextRows };
         const entries = Object.entries(mergedCache).sort(
@@ -116,18 +129,16 @@ export default function CustomFileViewer() {
         const trimmedEntries = entries.slice(-MAX_CACHED_ROWS);
 
         const trimmedCache: Record<number, ParsedRow> = {};
-        trimmedEntries.forEach(([index, row]) => {
-          trimmedCache[Number(index)] = row;
+        trimmedEntries.forEach(([idx, row]) => {
+          trimmedCache[Number(idx)] = row;
         });
 
         rowCacheRef.current = trimmedCache;
         setCacheVersion((current) => current + 1);
-        resolve();
-      };
-
-      request.onerror = () => reject(request.error);
-      transaction.onerror = () => reject(transaction.error);
-    });
+      } catch (err) {
+        console.error('Failed to slice block:', err);
+      }
+    };
   };
 
   const handleModeChange = () => {
@@ -137,13 +148,16 @@ export default function CustomFileViewer() {
   };
 
   const loadVisibleRows = async (startIndex: number, endIndex: number) => {
-    const sameRange =
-      loadingRangeRef.current?.start === startIndex &&
-      loadingRangeRef.current?.end === endIndex;
+    let cacheMissing = false;
+    for (let i = startIndex; i <= endIndex; i++) {
+      if (!rowCacheRef.current[i]) {
+        cacheMissing = true;
+        break;
+      }
+    }
 
-    if (sameRange) return;
+    if (!cacheMissing) return;
 
-    loadingRangeRef.current = { start: startIndex, end: endIndex };
     await fetchRowsForRange(startIndex, endIndex);
   };
 
@@ -151,25 +165,23 @@ export default function CustomFileViewer() {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    fileRef.current = file; // ◄── Keep a reference to the file blob
+    fileRef.current = file;
     setStatus('Processing...');
     setRowCount(0);
     setCacheVersion(0);
     rowCacheRef.current = {};
-    loadingRangeRef.current = null;
 
     if (mode === 'traditional') {
       const sizeInMb = file.size / (1024 * 1024);
 
       if (sizeInMb > 50) {
         setStatus(
-          `Traditional mode may struggle with ${file.name} (${sizeInMb.toFixed(1)} MB). It loads the entire file into memory and can fail. Switch to Optimized mode for chunked processing.`,
+          `Traditional mode may struggle with ${file.name} (${sizeInMb.toFixed(1)} MB). Switch to Optimized mode.`,
         );
         return;
       }
 
       const reader = new FileReader();
-
       reader.onload = (e) => {
         const text = e.target?.result;
         if (typeof text !== 'string') return;
@@ -178,16 +190,10 @@ export default function CustomFileViewer() {
         setRowCount(rows.length);
         setStatus(`Finished! Total rows: ${rows.length}`);
       };
-
-      reader.onerror = () => {
-        setStatus(
-          `Traditional mode could not read ${file.name}. Large CSVs can exceed browser memory limits. Switch to Optimized mode for better handling.`,
-        );
-      };
-
       reader.readAsText(file);
       return;
     }
+
     const start = (startTimeRef.current = performance.now());
 
     workerRef.current?.terminate();
@@ -200,16 +206,19 @@ export default function CustomFileViewer() {
         setStatus(event.data.message);
       } else if (type === 'PROGRESS') {
         setRowCount(event.data.totalSoFar);
-        // Use the customized message sent from the worker containing the percentage
-        setStatus((event.data as any).message);
+        setStatus(
+          (event.data as any).message ||
+            `Loading... Parsed ${event.data.totalSoFar} rows`,
+        );
       } else if (type === 'DONE') {
         const end = performance.now();
         const duration = ((end - start) / 1000).toFixed(2);
-        console.log(`Parsing completed in ${duration} seconds`);
         setRowCount(event.data.totalRows);
         setStatus(
           `Finished! Total rows: ${event.data.totalRows.toLocaleString()} in ${duration}s`,
         );
+
+        void fetchRowsForRange(0, 15);
       } else if (type === 'ERROR') {
         setStatus(`Error: ${event.data.error}`);
       }
@@ -224,9 +233,12 @@ export default function CustomFileViewer() {
     return (
       <div
         style={style}
-        className="flex items-center border-b border-slate-200 bg-white px-4 text-sm text-slate-700"
+        className="flex items-center border-b border-slate-200 bg-white px-4 text-sm text-slate-700 font-mono whitespace-nowrap overflow-hidden"
       >
-        {row ? row.join(' | ') : 'Loading...'}
+        <span className="text-slate-400 mr-4 w-16 select-none">
+          {(index + 1).toLocaleString()}
+        </span>
+        {row ? row.join(' | ') : <span className="text-slate-300">Loading...</span>}
       </div>
     );
   };
@@ -235,7 +247,6 @@ export default function CustomFileViewer() {
     if (status === '') {
       return <p className="text-gray-600">Upload a CSV file to process.</p>;
     }
-
     return null;
   };
 
@@ -244,17 +255,17 @@ export default function CustomFileViewer() {
 
     return (
       <div className="overflow-hidden rounded border border-gray-300">
-        <List
-          style={{ height: 500, width: '100%' }}
-          rowCount={rowCount}
-          rowHeight={40}
-          overscanCount={5}
-          rowComponent={Row as any}
-          rowProps={{} as any}
-          onRowsRendered={({ startIndex, stopIndex }) => {
-            void loadVisibleRows(startIndex, stopIndex);
+        <VirtualList
+          height={500}
+          itemCount={rowCount}
+          itemSize={40}
+          overscanCount={10}
+          onItemsRendered={({ visibleStartIndex, visibleStopIndex }) => {
+            void loadVisibleRows(visibleStartIndex, visibleStopIndex);
           }}
-        />
+        >
+          {Row}
+        </VirtualList>
       </div>
     );
   };
@@ -302,7 +313,7 @@ export default function CustomFileViewer() {
 
       <LoadDefaultMessage />
       {mode === 'optimized' ? <OptimizedList /> : null}
-      <p className="font-semibold text-gray-600">{status}</p>
+      <p className="mt-4 font-semibold text-gray-600">{status}</p>
     </div>
   );
 }
