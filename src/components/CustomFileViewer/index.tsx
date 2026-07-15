@@ -123,15 +123,18 @@ export default function CustomFileViewer() {
         });
 
         const mergedCache = { ...rowCacheRef.current, ...nextRows };
-        const entries = Object.entries(mergedCache).sort(
-          ([left], [right]) => Number(left) - Number(right),
-        );
-        const trimmedEntries = entries.slice(-MAX_CACHED_ROWS);
-
         const trimmedCache: Record<number, ParsedRow> = {};
-        trimmedEntries.forEach(([idx, row]) => {
-          trimmedCache[Number(idx)] = row;
+
+        // ── SPATIAL CACHE EVICTION ──────────────────────────────────────────
+        // Instead of sorting, we keep only the rows close to our active view.
+        // This keeps scrolling up/down completely smooth without dumping viewport rows.
+        Object.entries(mergedCache).forEach(([idxStr, row]) => {
+          const idx = Number(idxStr);
+          if (idx >= safeStart - 200 && idx <= safeEnd + 200) {
+            trimmedCache[idx] = row;
+          }
         });
+        // ────────────────────────────────────────────────────────────────────
 
         rowCacheRef.current = trimmedCache;
         setCacheVersion((current) => current + 1);
@@ -238,7 +241,11 @@ export default function CustomFileViewer() {
         <span className="text-slate-400 mr-4 w-16 select-none">
           {(index + 1).toLocaleString()}
         </span>
-        {row ? row.join(' | ') : <span className="text-slate-300">Loading...</span>}
+        {row ? (
+          row.join(' | ')
+        ) : (
+          <span className="text-slate-300">Loading...</span>
+        )}
       </div>
     );
   };
@@ -312,7 +319,22 @@ export default function CustomFileViewer() {
       </div>
 
       <LoadDefaultMessage />
-      {mode === 'optimized' ? <OptimizedList /> : null}
+      {/* {mode === 'optimized' ? <OptimizedList /> : null} */}
+      {mode === 'optimized' && status !== '' && rowCount > 0 ? (
+        <div className="overflow-hidden rounded border border-gray-300">
+          <VirtualList
+            height={500}
+            itemCount={rowCount}
+            itemSize={40}
+            overscanCount={10}
+            onItemsRendered={({ visibleStartIndex, visibleStopIndex }) => {
+              void loadVisibleRows(visibleStartIndex, visibleStopIndex);
+            }}
+          >
+            {Row}
+          </VirtualList>
+        </div>
+      ) : null}
       <p className="mt-4 font-semibold text-gray-600">{status}</p>
     </div>
   );
