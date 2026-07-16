@@ -10,7 +10,6 @@ import {
 import ParseWorker from '../../parser.worker.js?worker';
 import VirtualList from '../../commons/VirtualList';
 
-
 type Mode = 'traditional' | 'optimized';
 type ParsedRow = string[];
 
@@ -20,6 +19,14 @@ type WorkerMessageData =
   | { type: 'DONE'; totalRows: number }
   | { type: 'ERROR'; error: string };
 
+const formatCompactNumber = (num: number, useLongFormat = false): string => {
+  return new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    compactDisplay: useLongFormat ? 'long' : 'short',
+    maximumFractionDigits: 2,
+  }).format(num);
+};
+
 const MAX_CACHED_ROWS = 250;
 
 export default function CustomFileViewer() {
@@ -27,10 +34,13 @@ export default function CustomFileViewer() {
   const [status, setStatus] = useState('');
   const [progressPercent, setProgressPercent] = useState<number | null>(null);
   const [mode, setMode] = useState<Mode>('optimized');
-  const [fileDetails, setFileDetails] = useState<{ name: string; size: string } | null>(null);
+  const [fileDetails, setFileDetails] = useState<{
+    name: string;
+    size: string;
+  } | null>(null);
   const [parseDuration, setParseDuration] = useState<string | null>(null);
   const [, setCacheVersion] = useState(0);
-  
+
   const startTimeRef = useRef<number | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const rowCacheRef = useRef<Record<number, ParsedRow>>({});
@@ -170,10 +180,13 @@ export default function CustomFileViewer() {
   const processSelectedFile = (file: File) => {
     fileRef.current = file;
     const sizeInMb = file.size / (1024 * 1024);
-    
+
     setFileDetails({
       name: file.name,
-      size: sizeInMb > 1024 ? `${(sizeInMb / 1024).toFixed(2)} GB` : `${sizeInMb.toFixed(2)} MB`
+      size:
+        sizeInMb > 1024
+          ? `${(sizeInMb / 1024).toFixed(2)} GB`
+          : `${sizeInMb.toFixed(2)} MB`,
     });
 
     setStatus('Reading file schema...');
@@ -184,7 +197,7 @@ export default function CustomFileViewer() {
     if (mode === 'traditional') {
       if (sizeInMb > 50) {
         setStatus(
-          `Traditional mode struggles with files over 50MB. Please switch to Optimized mode.`
+          `Traditional mode struggles with files over 50MB. Please switch to Optimized mode.`,
         );
         return;
       }
@@ -217,14 +230,16 @@ export default function CustomFileViewer() {
         setStatus(event.data.message);
       } else if (type === 'PROGRESS') {
         setRowCount(event.data.totalSoFar);
-        
+
         // Extract progress percentage from message string (e.g., "Mapping blocks... 25.1%")
         const msg = event.data.message || '';
         const match = msg.match(/(\d+\.?\d*)%/);
         if (match) {
           setProgressPercent(parseFloat(match[1]));
         }
-        setStatus(msg || `Parsed ${event.data.totalSoFar.toLocaleString()} rows`);
+        setStatus(
+          msg || `Parsed ${event.data.totalSoFar.toLocaleString()} rows`,
+        );
       } else if (type === 'DONE') {
         const end = performance.now();
         const duration = ((end - start) / 1000).toFixed(2);
@@ -286,11 +301,15 @@ export default function CustomFileViewer() {
                 <span className="bg-slate-100 text-slate-600 rounded px-1.5 py-0.5 mr-1 select-none text-[10px] uppercase font-sans font-bold">
                   Col {cellIdx + 1}
                 </span>
-                <span className="text-slate-800">{cell || <span className="text-slate-300">null</span>}</span>
+                <span className="text-slate-800">
+                  {cell || <span className="text-slate-300">null</span>}
+                </span>
               </span>
             ))
           ) : (
-            <span className="text-slate-300 italic animate-pulse">Loading block content...</span>
+            <span className="text-slate-300 italic animate-pulse">
+              Loading block content...
+            </span>
           )}
         </div>
       </div>
@@ -303,17 +322,23 @@ export default function CustomFileViewer() {
       <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-6">
         <div>
           <h1 className="text-3xl font-black tracking-tight text-slate-900 flex items-center gap-2">
-            Superbolt <span className="text-blue-600 text-2xl font-light">CSV Engine v2</span>
+            Superbolt{' '}
+            <span className="text-blue-600 text-2xl font-light">
+              CSV Engine v2
+            </span>
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Engineered to map, slice, and stream multi-gigabyte datasets directly inside browser sandbox.
+            Engineered to map, slice, and stream multi-gigabyte datasets
+            directly inside browser sandbox.
           </p>
         </div>
 
         {/* Mode Toggle Swtich */}
         <div className="flex items-center gap-3 bg-slate-100 p-1.5 rounded-full border border-slate-200 self-start md:self-auto">
           <button
-            onClick={() => { if (mode !== 'traditional') handleModeChange(); }}
+            onClick={() => {
+              if (mode !== 'traditional') handleModeChange();
+            }}
             className={`px-4 py-1.5 text-xs font-bold rounded-full transition-all ${
               mode === 'traditional'
                 ? 'bg-white text-slate-950 shadow-sm'
@@ -323,7 +348,9 @@ export default function CustomFileViewer() {
             Traditional
           </button>
           <button
-            onClick={() => { if (mode !== 'optimized') handleModeChange(); }}
+            onClick={() => {
+              if (mode !== 'optimized') handleModeChange();
+            }}
             className={`px-4 py-1.5 text-xs font-bold rounded-full transition-all flex items-center gap-1.5 ${
               mode === 'optimized'
                 ? 'bg-blue-600 text-white shadow-sm'
@@ -331,7 +358,9 @@ export default function CustomFileViewer() {
             }`}
           >
             Optimized
-            <span className="bg-blue-500 text-[9px] text-blue-100 px-1 py-0.2 rounded font-black">ACTIVE</span>
+            <span className="bg-blue-500 text-[9px] text-blue-100 px-1 py-0.2 rounded font-black">
+              ACTIVE
+            </span>
           </button>
         </div>
       </div>
@@ -355,15 +384,27 @@ export default function CustomFileViewer() {
           className="absolute inset-0 opacity-0 cursor-pointer"
         />
         <div className="mb-4 rounded-full bg-slate-50 p-4 border border-slate-100 group-hover:scale-105 transition-transform">
-          <svg className="h-8 w-8 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V4a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+          <svg
+            className="h-8 w-8 text-slate-500"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 13h6m-3-3v6m-9 1V4a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"
+            />
           </svg>
         </div>
         <h3 className="text-md font-bold text-slate-800">
           {fileDetails ? fileDetails.name : 'Drag & drop your CSV file here'}
         </h3>
         <p className="text-xs text-slate-400 mt-1">
-          {fileDetails ? `Detected: ${fileDetails.size}` : 'Or click to browse your storage. Handles files up to 10GB.'}
+          {fileDetails
+            ? `Detected: ${fileDetails.size}`
+            : 'Or click to browse your storage. Handles files up to 10GB.'}
         </p>
       </div>
 
@@ -371,30 +412,47 @@ export default function CustomFileViewer() {
       {fileDetails && (
         <div className="mb-8 grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Indexed Rows</span>
-            <span className="text-xl font-black text-slate-900 mt-1 block">
-              {rowCount > 0 ? rowCount.toLocaleString() : '---'}
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+              Indexed Rows
             </span>
+            <span className="text-xl font-black text-slate-900 mt-1 block">
+              {rowCount > 0 ? formatCompactNumber(rowCount, true) : '---'}{' '}
+              {/* "36.4 million" */}
+            </span>
+            {rowCount > 0 && (
+              <span className="text-[10px] text-slate-400 mt-0.5 block font-mono">
+                {formatCompactNumber(rowCount)} ({rowCount.toLocaleString()}{' '}
+                exact)
+              </span>
+            )}
           </div>
 
           <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Physical File Size</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+              Physical File Size
+            </span>
             <span className="text-xl font-black text-slate-900 mt-1 block">
               {fileDetails.size}
             </span>
           </div>
 
           <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Processing Time</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+              Processing Time
+            </span>
             <span className="text-xl font-black text-blue-600 mt-1 block">
               {parseDuration ? `${parseDuration}s` : 'Counting...'}
             </span>
           </div>
 
           <div className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Engine Status</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+              Engine Status
+            </span>
             <span className="text-xs font-bold mt-1.5 flex items-center gap-1.5 text-slate-600 block">
-              <span className={`h-2.5 w-2.5 rounded-full ${status === 'Ready' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400 animate-spin'}`} />
+              <span
+                className={`h-2.5 w-2.5 rounded-full ${status === 'Ready' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400 animate-spin'}`}
+              />
               {status}
             </span>
           </div>
@@ -405,8 +463,12 @@ export default function CustomFileViewer() {
       {progressPercent !== null && progressPercent < 100 && (
         <div className="mb-8 bg-slate-100 p-4 rounded-xl border border-slate-200">
           <div className="flex justify-between items-center mb-2">
-            <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Mapping Blocks Schema</span>
-            <span className="text-xs font-black text-blue-600">{progressPercent}%</span>
+            <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+              Mapping Blocks Schema
+            </span>
+            <span className="text-xs font-black text-blue-600">
+              {progressPercent}%
+            </span>
           </div>
           <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
             <div
@@ -420,7 +482,9 @@ export default function CustomFileViewer() {
       {/* ── EMPTY DEFAULT VIEW ── */}
       {!fileDetails && (
         <div className="text-center py-20 bg-slate-50/50 rounded-2xl border border-slate-100">
-          <p className="text-slate-400 text-sm">Please upload or drag a structured CSV file to initiate mapping.</p>
+          <p className="text-slate-400 text-sm">
+            Please upload or drag a structured CSV file to initiate mapping.
+          </p>
         </div>
       )}
 
@@ -430,9 +494,11 @@ export default function CustomFileViewer() {
           {/* Grid Header Panel */}
           <div className="bg-slate-50 border-b border-slate-200 px-6 py-3 flex justify-between items-center text-xs font-bold text-slate-500 uppercase tracking-wider">
             <span>Dynamic Column Schema Mapper</span>
-            <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded font-black normal-case">Sliding Window: 500px Viewport</span>
+            <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded font-black normal-case">
+              Sliding Window: 500px Viewport
+            </span>
           </div>
-          
+
           <VirtualList
             height={500}
             itemCount={rowCount}
