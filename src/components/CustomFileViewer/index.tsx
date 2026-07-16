@@ -189,6 +189,8 @@ export default function CustomFileViewer() {
           : `${sizeInMb.toFixed(2)} MB`,
     });
 
+    setParseDuration(null);
+    setProgressPercent(null);
     setStatus('Reading file schema...');
     setRowCount(0);
     setCacheVersion(0);
