@@ -38,6 +38,10 @@ self.onmessage = async (e) => {
   let blockStartByte = 0;
 
   let dbBuffer = [];
+  const writePromises = [];
+
+  // Track the last reported percentage to throttle React renders
+  let lastReportedPercent = -1;
 
   self.postMessage({ type: 'STATUS', message: "Accelerating file mapping..." });
 
@@ -56,8 +60,11 @@ self.onmessage = async (e) => {
           });
         }
         if (dbBuffer.length > 0) {
-          await saveBatchToDB(dbBuffer);
+          writePromises.push(saveBatchToDB([...dbBuffer]));
         }
+        
+        self.postMessage({ type: 'STATUS', message: "Finalizing storage commit..." });
+        await Promise.all(writePromises);
         break;
       }
 
@@ -82,8 +89,9 @@ self.onmessage = async (e) => {
               endRow: rowCount - 1
             });
 
+            // Fast async write in background
             if (dbBuffer.length >= 50) {
-              await saveBatchToDB(dbBuffer);
+              writePromises.push(saveBatchToDB([...dbBuffer]));
               dbBuffer = [];
             }
 
@@ -96,12 +104,18 @@ self.onmessage = async (e) => {
       leftoverBytes = chunk.subarray(lineStart);
       globalByteOffset += lineStart;
 
-      const percentage = Math.min(((globalByteOffset / fileSize) * 100), 99).toFixed(1);
-      self.postMessage({ 
-        type: 'PROGRESS', 
-        totalSoFar: rowCount,
-        message: `Mapping blocks... ${percentage}%`
-      });
+      // ── THRU-PUT OPTIMIZATION: Only notify React when progress goes up by at least 1.0% ──
+      const rawPercentage = (globalByteOffset / fileSize) * 100;
+      const roundedPercent = Math.floor(rawPercentage);
+      
+      if (roundedPercent > lastReportedPercent && roundedPercent < 100) {
+        lastReportedPercent = roundedPercent;
+        self.postMessage({ 
+          type: 'PROGRESS', 
+          totalSoFar: rowCount,
+          message: `Mapping blocks... ${rawPercentage.toFixed(1)}%`
+        });
+      }
     }
 
     self.postMessage({ type: 'DONE', totalRows: rowCount });
