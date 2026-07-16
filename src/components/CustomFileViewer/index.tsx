@@ -526,7 +526,7 @@ export default function CustomFileViewer() {
       {/* ── EMPTY DEFAULT VIEW ── */}
       {!fileDetails && (
         <div className="text-center py-20 bg-slate-50/50 rounded-2xl border border-slate-100">
-          <p className="text-slate-400 text-sm">
+          <p className="text-slate-400 text-sm text-white">
             Please upload or drag a structured CSV file to initiate mapping.
           </p>
         </div>
