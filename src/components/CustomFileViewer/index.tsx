@@ -49,10 +49,47 @@ export default function CustomFileViewer() {
   const dragOverRef = useRef<boolean>(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
+  // CustomFileViewer.tsx
+
+  // Helper to fully delete the database from browser disk storage
+  const deleteDatabaseFromStorage = () => {
+    return new Promise<void>((resolve) => {
+      const request = indexedDB.deleteDatabase('LargeCSVDatabase');
+
+      request.onsuccess = () => {
+        console.log('IndexedDB storage purged successfully.');
+        resolve();
+      };
+
+      request.onerror = () => {
+        console.error('Failed to purge IndexedDB storage.');
+        resolve(); // Resolve anyway to prevent hanging
+      };
+
+      request.onblocked = () => {
+        console.warn('Database purge blocked by an open connection.');
+        resolve();
+      };
+    });
+  };
+
+  // ... inside your CustomFileViewer component ...
+
   useEffect(() => {
-    return () => {
+    // Add a listener to clean up database space if the user closes/refreshes the tab
+    const handleBeforeUnload = () => {
       workerRef.current?.terminate();
       dbRef.current?.close();
+      void deleteDatabaseFromStorage();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      workerRef.current?.terminate();
+      dbRef.current?.close();
+      // Delete database when the component unmounts (e.g. user navigates away)
+      void deleteDatabaseFromStorage();
     };
   }, []);
 
@@ -64,10 +101,15 @@ export default function CustomFileViewer() {
     setFileDetails(null);
     setCacheVersion(0);
     rowCacheRef.current = {};
+
     workerRef.current?.terminate();
     workerRef.current = null;
+
     dbRef.current?.close();
     dbRef.current = null;
+
+    // Purge the old database before setting up a new session
+    void deleteDatabaseFromStorage();
   };
 
   const ensureDatabase = () => {
