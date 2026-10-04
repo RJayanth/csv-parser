@@ -27,7 +27,6 @@ const formatCompactNumber = (num: number, useLongFormat = false): string => {
   }).format(num);
 };
 
-const MAX_CACHED_ROWS = 250;
 
 export default function CustomFileViewer() {
   const [rowCount, setRowCount] = useState(0);
@@ -46,7 +45,6 @@ export default function CustomFileViewer() {
   const rowCacheRef = useRef<Record<number, ParsedRow>>({});
   const dbRef = useRef<IDBDatabase | null>(null);
   const fileRef = useRef<File | null>(null);
-  const dragOverRef = useRef<boolean>(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
   // CustomFileViewer.tsx
@@ -120,7 +118,7 @@ export default function CustomFileViewer() {
     return new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('LargeCSVDatabase', 2);
 
-      request.onupgradeneeded = (e) => {
+      request.onupgradeneeded = () => {
         const database = request.result;
         if (!database.objectStoreNames.contains('blocks')) {
           database.createObjectStore('blocks', { keyPath: 'blockIndex' });
