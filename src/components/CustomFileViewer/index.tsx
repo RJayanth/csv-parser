@@ -525,10 +525,27 @@ export default function CustomFileViewer() {
 
       {/* ── EMPTY DEFAULT VIEW ── */}
       {!fileDetails && (
-        <div className="text-center py-20 bg-slate-50/50 rounded-2xl border border-slate-100">
-          <p className="text-slate-400 text-sm text-white">
-            Please upload or drag a structured CSV file to initiate mapping.
-          </p>
+        <div className="mx-auto max-w-3xl rounded-2xl border border-slate-200 bg-slate-100/80 px-6 py-4 text-center shadow-sm">
+          <div className="flex items-center justify-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm">
+              <svg
+                className="h-5 w-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.8}
+                  d="M7 16.5V7.5A2.5 2.5 0 019.5 5h5.2c.5 0 1 .2 1.4.6l2.4 2.4c.4.4.6.9.6 1.4v7.1A2.5 2.5 0 0116.6 19H9.5A2.5 2.5 0 017 16.5zM9.5 5v3.5h5.5M9.5 12.5h5M9.5 15.5h5"
+                />
+              </svg>
+            </div>
+            <p className="text-sm font-medium text-slate-600">
+              Please upload or drag a structured CSV file to initiate mapping.
+            </p>
+          </div>
         </div>
       )}
 
